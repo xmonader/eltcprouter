@@ -36,6 +36,7 @@ type Service struct {
 	ClientSecret string `toml:"clientsecret` // will forward connection to it directly instead of hitting the Addr.
 	TLSPort      int    `toml:"tlsport"`
 	HTTPPort     int    `toml:"httpport"`
+	ProxyProto   int    `toml:"proxyproto"`
 }
 
 type DbBackendConfig struct {

@@ -59,7 +59,7 @@ func NewServer(forwardOptions ServerOptions, store store.Store, services map[str
 
 func (s *Server) Start(ctx context.Context) error {
 	for key, service := range s.Services {
-		s.RegisterService(key, service.Addr, service.ClientSecret, service.TLSPort, service.HTTPPort)
+		s.RegisterService(key, service.Addr, service.ClientSecret, service.TLSPort, service.HTTPPort, service.ProxyProto)
 	}
 
 	go s.serveHTTP(ctx)
@@ -75,11 +75,11 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) RegisterService(name, remoteAddr, clientSecret string, tlsport int, httpport int) {
+func (s *Server) RegisterService(name, remoteAddr, clientSecret string, tlsport int, httpport int, proxyproto int) {
 	log.Println("register ", name, remoteAddr, clientSecret, tlsport, httpport)
 	s.backendM.Lock()
 	defer s.backendM.Unlock()
-	s.Services[name] = Service{Addr: remoteAddr, ClientSecret: clientSecret, TLSPort: tlsport, HTTPPort: httpport}
+	s.Services[name] = Service{Addr: remoteAddr, ClientSecret: clientSecret, TLSPort: tlsport, HTTPPort: httpport, ProxyProto: proxyproto}
 }
 
 func (s *Server) DeleteService(name string) {
@@ -281,14 +281,14 @@ func (s *Server) handleService(mainconn net.Conn, serverName, peeked string, isT
 		if !ok {
 			err = fmt.Errorf("no active connection for service %s", serverName)
 		} else {
-			s.forwardConnection(conn, activeConn)
+			s.forwardConnection(conn, activeConn, service.ProxyProto)
 		}
 	} else {
 		remotePort := service.HTTPPort
 		if isTLS {
 			remotePort = service.TLSPort
 		}
-		err = s.forwardConnectionToService(conn, service.Addr, remotePort)
+		err = s.forwardConnectionToService(conn, service.Addr, remotePort, service.ProxyProto)
 	}
 
 	if err != nil {
@@ -298,9 +298,13 @@ func (s *Server) handleService(mainconn net.Conn, serverName, peeked string, isT
 	return nil
 }
 
-func (s *Server) forwardConnection(local, remote net.Conn) {
+func (s *Server) forwardConnection(local, remote net.Conn, proxyProtoVersion int) {
 	log.Printf("forward active connection from %s to %s\n", local.RemoteAddr(), remote.RemoteAddr())
 
+	headerBytes := BuildHeader(proxyProtoVersion, local.RemoteAddr().(*net.TCPAddr), local.LocalAddr().(*net.TCPAddr))
+	if (len(headerBytes) > 0) {
+		remote.Write(headerBytes)
+	}
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go forward(local, remote, &wg)
@@ -309,7 +313,7 @@ func (s *Server) forwardConnection(local, remote net.Conn) {
 	wg.Wait()
 }
 
-func (s *Server) forwardConnectionToService(conn net.Conn, remoteAddr string, remotePort int) error {
+func (s *Server) forwardConnectionToService(conn net.Conn, remoteAddr string, remotePort int, proxyProtoVersion int) error {
 	remoteTCPAddr := &net.TCPAddr{IP: net.ParseIP(remoteAddr), Port: remotePort}
 	defer conn.Close()
 
@@ -321,6 +325,6 @@ func (s *Server) forwardConnectionToService(conn net.Conn, remoteAddr string, re
 
 	defer connService.Close()
 
-	s.forwardConnection(conn, connService)
+	s.forwardConnection(conn, connService, proxyProtoVersion)
 	return nil
 }
